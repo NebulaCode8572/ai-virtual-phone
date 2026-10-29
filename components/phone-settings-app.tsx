@@ -18,6 +18,7 @@ import { AboutDeclaration } from "./settings/about-declaration";
 import { BindingManager } from "./settings/binding-manager";
 import { WeixinSettings } from "./settings/weixin-settings";
 import { CloudServicesPage } from "./settings/cloud-services-setup";
+import { CallOverlaySettings } from "./settings/call-overlay-settings";
 import { ToolboxSettings } from "./settings/toolbox-settings";
 import { ModerationCenter } from "./settings/moderation-center";
 import { AgentComputerSettings } from "./settings/agent-computer-settings";
@@ -58,6 +59,7 @@ type SubPage =
     | "toolbox"
     | "agentComputer"
     | "moderation"
+    | "callOverlay"
     | "about";
 
 const SETTINGS_MENU = [
@@ -184,7 +186,9 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
             ? ""
             : currentPage === "moderation"
                 ? "管理中心"
-                : SETTINGS_MENU.find(m => m.id === currentPage)?.label || "设置";
+                : currentPage === "callOverlay"
+                    ? ""
+                    : SETTINGS_MENU.find(m => m.id === currentPage)?.label || "设置";
     const title = subpageTitle || defaultTitle;
 
     const setSubpageRightAction = useCallback((page: string, action: ReactNode | null) => {
@@ -332,6 +336,8 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
                 return <AgentComputerSettings onNotice={onNotice} />;
             case "moderation":
                 return <ModerationCenter onNotice={onNotice} />;
+            case "callOverlay":
+                return <CallOverlaySettings />;
             case "identity":
                 return <UserIdentitySettings />;
             case "about":
@@ -467,6 +473,22 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
                                     <div className="card-featured-desc">开启：可拖动通话小窗、自动搭话、消息排队、语音留档；关闭：按原来的方式通话</div>
                                 </div>
                                 <Toggle checked={enhancedCall} onChange={handleEnhancedCallChange} className="settings-toggle-control" />
+                            </div>
+                            <div
+                                className="app-card card-featured settings-toggle-card"
+                                role="button"
+                                tabIndex={0}
+                                style={{ cursor: "pointer" }}
+                                onClick={() => setCurrentPage("callOverlay")}
+                            >
+                                <span className="card-icon card-icon-glass">
+                                    <SlidersHorizontal size={20} strokeWidth={1.8} />
+                                </span>
+                                <div className="card-featured-body">
+                                    <div className="card-featured-label">通话浮窗主题</div>
+                                    <div className="card-featured-desc">小窗快捷回复条的配色与透明度</div>
+                                </div>
+                                <ChevronRight size={18} className="settings-account-chevron" />
                             </div>
                         </div>
                         {isAdmin ? (
