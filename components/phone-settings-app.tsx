@@ -27,6 +27,7 @@ import { CardGrid, FeaturedCard, type CardItem, type FeaturedCardItem } from "./
 import { GlassIcon } from "./ui/glass-icon";
 import { Toggle } from "./ui/form";
 import { loadChatAppSettings, saveChatAppSettings } from "@/lib/chat-storage";
+import { loadCallMode, saveCallMode } from "@/lib/call-mode-store";
 import { loadKeepAlive, saveKeepAlive } from "@/lib/weixin-storage";
 import { BINDING_ACCENTS, CONTENT_APP_ACCENTS } from "@/lib/ui-accent-colors";
 
@@ -115,6 +116,7 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
     const [floatingDockEnabled, setFloatingDockEnabled] = useState(false);
     const [floatingDockSheetOpen, setFloatingDockSheetOpen] = useState(false);
     const [keepAlive, setKeepAlive] = useState(false);
+    const [enhancedCall, setEnhancedCall] = useState(() => loadCallMode() === "enhanced");
     // 角色电脑：施工中弹窗（返回 / 仍要看看）
     const pageBodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -251,6 +253,12 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
         // use-weixin-bridge 监听这个事件来起停保活（与微信 Bot 的启用状态无关）
         window.dispatchEvent(new CustomEvent("weixin-config-changed"));
         onNotice(next ? "已开启后台保活" : "已关闭后台保活");
+    }, [onNotice]);
+
+    const handleEnhancedCallChange = useCallback((next: boolean) => {
+        setEnhancedCall(next);
+        saveCallMode(next ? "enhanced" : "legacy");
+        onNotice(next ? "已切换到增强通话" : "已切换到传统通话");
     }, [onNotice]);
 
     const imageGenerationItem = SETTINGS_MENU.find(i => i.id === "imageGeneration")!;
@@ -449,6 +457,16 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
                                     <div className="card-featured-desc">切到后台时尽量保持网页运行，主动消息与轮询不中断</div>
                                 </div>
                                 <Toggle checked={keepAlive} onChange={handleKeepAliveChange} className="settings-toggle-control" />
+                            </div>
+                            <div className="app-card card-featured settings-toggle-card">
+                                <span className="card-icon card-icon-glass">
+                                    <GlassIcon name="voice" />
+                                </span>
+                                <div className="card-featured-body">
+                                    <div className="card-featured-label">增强通话</div>
+                                    <div className="card-featured-desc">开启：可拖动通话小窗、自动搭话、消息排队、语音留档；关闭：按原来的方式通话</div>
+                                </div>
+                                <Toggle checked={enhancedCall} onChange={handleEnhancedCallChange} className="settings-toggle-control" />
                             </div>
                         </div>
                         {isAdmin ? (

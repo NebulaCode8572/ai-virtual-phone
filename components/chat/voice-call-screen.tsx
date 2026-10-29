@@ -27,6 +27,7 @@ import { useCallAutoChat } from "./use-call-auto-chat";
 import { useCallReplyQueue } from "./use-call-reply-queue";
 import { useShellCallOverlay } from "./use-shell-call-overlay";
 import { persistCallAudio } from "@/lib/call-audio-storage";
+import { loadCallMode } from "@/lib/call-mode-store";
 
 // ── Types ───────────────────────────────────────────
 
@@ -106,9 +107,12 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
     const _initUi = resolveUserIdentity(session.contactId, "chat");
     const userNameRef = useRef<string>(_initUi?.name || "你");
 
-    // 自动搭话
+    // 通话模式：enhanced=增强（自动搭话/消息排队/原生浮窗/语音留档），legacy=传统
+    const [enhancedCall] = useState(() => loadCallMode() === "enhanced");
+
+    // 自动搭话（仅增强模式）
     const autoChat = useCallAutoChat({
-        active: callState !== "CONNECTING" && callState !== "ENDED",
+        active: enhancedCall && callState !== "CONNECTING" && callState !== "ENDED",
         callStateRef: stateRef,
         runTurn: () => void runConversationTurn(),
         beforeTrigger: () => {
@@ -124,12 +128,12 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
         callState,
         callStateRef: stateRef,
         runTurn: (text) => void runConversationTurn(text),
-        active: callState !== "CONNECTING" && callState !== "ENDED",
+        active: enhancedCall && callState !== "CONNECTING" && callState !== "ENDED",
     });
 
     // 原生浮窗
     useShellCallOverlay({
-        show: minimized,
+        show: enhancedCall && minimized,
         sessionId: session.id,
         characterId: character.id,
         kind: "voice",
@@ -435,11 +439,13 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
                     if (stateRef.current === "ENDED") return;
 
                     if (audioBlob) {
-                        // 语音留档：TTS 音频落库
-                        const audioRef = await persistCallAudio(audioBlob, {
-                            sessionId: session.id,
-                            characterId: character.id,
-                        });
+                        // 语音留档：TTS 音频落库（仅增强模式）
+                        const audioRef = enhancedCall
+                            ? await persistCallAudio(audioBlob, {
+                                sessionId: session.id,
+                                characterId: character.id,
+                            })
+                            : null;
                         
                         // 把引用写入最后一条助手消息
                         if (audioRef) {
@@ -481,7 +487,7 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
                 setCallState("IDLE");
             }
         }
-    }, [session, processAIResponse, playCallAudio]);
+    }, [session, processAIResponse, playCallAudio, enhancedCall]);
 
     // ── Auto-listen: 进入 IDLE 自动开始监听 ────────
 
@@ -617,6 +623,17 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
         const text = typedText.trim();
         if (!text) return;
         
+        if (!enhancedCall) {
+            // 传统模式：不排队，直接发送（忙时也不积压，避免消息卡在队列里发不出去）
+            if (sttRef.current) {
+                sttRef.current.abort();
+                sttRef.current = null;
+            }
+            setTypedText("");
+            void runConversationTurn(text);
+            return;
+        }
+
         const result = replyQueue.submit(text);
         if (result === "rejected") return; // 队列满，保留输入
         
@@ -630,7 +647,7 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
                 sttRef.current = null;
             }
         }
-    }, [typedText, replyQueue, autoChat]);
+    }, [typedText, replyQueue, autoChat, enhancedCall, runConversationTurn]);
 
     // 输入框左侧的"重回"键：不发送新内容，直接让对方基于当前上下文重新回复一次
     const handleRegenerate = useCallback(() => {
