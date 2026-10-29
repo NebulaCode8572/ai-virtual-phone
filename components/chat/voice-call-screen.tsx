@@ -22,6 +22,11 @@ import { CallSttWarningDialog, hideCallSttWarningPermanently, isCallSttWarningHi
 import { isAndroidBrowser, isIOSDevice } from "./voice-input-platform";
 import { CallVolumeControl } from "./call-volume-control";
 import { startIncomingCallVibration } from "@/lib/call-vibration";
+import { CallMiniWindow } from "./call-mini-window";
+import { useCallAutoChat } from "./use-call-auto-chat";
+import { useCallReplyQueue } from "./use-call-reply-queue";
+import { useShellCallOverlay } from "./use-shell-call-overlay";
+import { persistCallAudio } from "@/lib/call-audio-storage";
 
 // ── Types ───────────────────────────────────────────
 
@@ -100,6 +105,36 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
     const messagesRef = useRef<ChatMessage[]>([]);
     const _initUi = resolveUserIdentity(session.contactId, "chat");
     const userNameRef = useRef<string>(_initUi?.name || "你");
+
+    // 自动搭话
+    const autoChat = useCallAutoChat({
+        active: callState !== "CONNECTING" && callState !== "ENDED",
+        callStateRef: stateRef,
+        runTurn: () => void runConversationTurn(),
+        beforeTrigger: () => {
+            if (sttRef.current) {
+                sttRef.current.abort();
+                sttRef.current = null;
+            }
+        },
+    });
+
+    // 消息排队
+    const replyQueue = useCallReplyQueue({
+        callState,
+        callStateRef: stateRef,
+        runTurn: (text) => void runConversationTurn(text),
+        active: callState !== "CONNECTING" && callState !== "ENDED",
+    });
+
+    // 原生浮窗
+    useShellCallOverlay({
+        show: minimized,
+        sessionId: session.id,
+        characterId: character.id,
+        kind: "voice",
+        onRestore: onRestore || (() => {}),
+    });
 
     // Keep refs in sync
     useEffect(() => { stateRef.current = callState; }, [callState]);
@@ -400,13 +435,35 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
                     if (stateRef.current === "ENDED") return;
 
                     if (audioBlob) {
+                        // 语音留档：TTS 音频落库
+                        const audioRef = await persistCallAudio(audioBlob, {
+                            sessionId: session.id,
+                            characterId: character.id,
+                        });
+                        
+                        // 把引用写入最后一条助手消息
+                        if (audioRef) {
+                            const lastMsg = messagesRef.current[messagesRef.current.length - 1];
+                            if (lastMsg && lastMsg.role === "assistant") {
+                                import("@/lib/chat-storage").then(({ updateChatMessage }) => {
+                                    updateChatMessage(session.id, lastMsg.id, {
+                                        mediaData: { ...lastMsg.mediaData, callAudioRef: audioRef },
+                                    });
+                                });
+                            }
+                        }
+
                         const { promise, abort } = playCallAudio(audioBlob);
                         audioAbortRef.current = abort;
                         await promise;
                         audioAbortRef.current = null;
+                        
+                        // 通知自动搭话：角色说完了
+                        autoChat.notifyAssistantSpoke(true);
                     }
                 } catch (e) {
                     console.warn("[VoiceCall] TTS failed:", e);
+                    autoChat.notifyAssistantSpoke(false);
                 }
             }
 
@@ -453,6 +510,7 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
             onFinal: (text) => {
                 sttRef.current = null;
                 if (text.trim()) {
+                    autoChat.notifyUserSpoke(); // 用户开口了
                     runConversationTurn(text.trim());
                 } else {
                     setInterimText("");
@@ -557,14 +615,22 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
 
     const handleTextSubmit = useCallback(() => {
         const text = typedText.trim();
-        if (!text || callState !== "IDLE") return;
-        if (sttRef.current) {
-            sttRef.current.abort();
-            sttRef.current = null;
-        }
+        if (!text) return;
+        
+        const result = replyQueue.submit(text);
+        if (result === "rejected") return; // 队列满，保留输入
+        
         setTypedText("");
-        runConversationTurn(text);
-    }, [typedText, callState, runConversationTurn]);
+        autoChat.notifyUserSpoke(); // 用户开口了，重置自动搭话计数
+        
+        if (result === "sent") {
+            // 立刻发送，停止识别
+            if (sttRef.current) {
+                sttRef.current.abort();
+                sttRef.current = null;
+            }
+        }
+    }, [typedText, replyQueue, autoChat]);
 
     // 输入框左侧的"重回"键：不发送新内容，直接让对方基于当前上下文重新回复一次
     const handleRegenerate = useCallback(() => {
@@ -587,7 +653,10 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
         onTranscribeStart: () => {
             if (stateRef.current === "USER_SPEAKING") setCallState("PROCESSING");
         },
-        onTranscript: (text) => { void runConversationTurn(text); },
+        onTranscript: (text) => {
+            autoChat.notifyUserSpoke(); // 用户开口了
+            void runConversationTurn(text);
+        },
         onError: () => {
             if (stateRef.current === "USER_SPEAKING" || stateRef.current === "PROCESSING") {
                 setCallState("IDLE");
@@ -633,17 +702,15 @@ export function VoiceCallScreen({ session, character, onEnd, onConnect, initiato
 
     if (minimized) {
         return (
-            <button
-                type="button"
-                className="call-mini-window"
-                style={{ backgroundImage: `url(${bgImageResolved || character.avatar || ""})` }}
-                onClick={onRestore}
-                aria-label={`返回与${character.name}的语音通话`}
-                title="点击返回通话"
-            >
-                <span className="call-mini-window-overlay" />
-                <span className="call-mini-window-name">{character.name}</span>
-            </button>
+            <CallMiniWindow
+                imageUrl={bgImageResolved || character.avatar}
+                title={character.name}
+                meta={[formatTime(callDuration), "语音通话"]}
+                ariaLabel={`返回与${character.name}的语音通话`}
+                onRestore={onRestore}
+                onReply={(text) => replyQueue.submit(text) !== "rejected"}
+                pendingCount={replyQueue.pending}
+            />
         );
     }
 
